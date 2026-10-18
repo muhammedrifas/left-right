@@ -3,7 +3,7 @@ import 'package:flutter/scheduler.dart';
 import '../../core/engine/game_engine.dart';
 import '../../core/models/game_enums.dart';
 import '../arena/arena_grid.dart';
-import '../effects/mirror_bezel.dart';
+import '../effects/arcade_background.dart';
 import '../hud/center_halo_hud.dart';
 
 class GameScreen extends StatefulWidget {
@@ -19,7 +19,6 @@ class _GameScreenState extends State<GameScreen>
   late final Ticker _ticker;
   Duration _lastElapsed = Duration.zero;
 
-  /// Selected starting turn for quick testing (defaults to Turn 1)
   int _selectedStartTurn = 1;
 
   @override
@@ -33,23 +32,16 @@ class _GameScreenState extends State<GameScreen>
       if (dt > 0 && dt < 0.25) {
         _engine.onTick(dt);
       }
-
-      if (_engine.status == GameStatus.gameOver && _ticker.isActive) {
-        _ticker.stop();
-      }
     });
+    _ticker.start();
   }
 
   void _startGame({int? overrideStartTurn}) {
     if (overrideStartTurn != null) {
       _selectedStartTurn = overrideStartTurn;
     }
-    if (_ticker.isActive) {
-      _ticker.stop();
-    }
     _lastElapsed = Duration.zero;
     _engine.startGame(startTurn: _selectedStartTurn);
-    _ticker.start();
   }
 
   @override
@@ -63,55 +55,130 @@ class _GameScreenState extends State<GameScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0D0F14),
-      body: SafeArea(
-        child: ListenableBuilder(
-          listenable: _engine,
-          builder: (context, _) {
-            final turn = _engine.currentTurn;
-            final mirrorMode = turn?.mirrorMode ?? MirrorMode.none;
+      body: ListenableBuilder(
+        listenable: _engine,
+        builder: (context, _) {
+          final turn = _engine.currentTurn;
+          final mirrorMode = turn?.mirrorMode ?? MirrorMode.none;
 
-            return Stack(
-              children: [
-                // 1. Dedicated Top HUD Bar + Unobstructed Gameplay Arena Below
-                if (turn != null)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      CenterHaloHud(
-                        timeBankListenable: _engine.timeBank,
-                        score: _engine.score,
-                        blitzStreak: _engine.blitzStreak,
-                        mirrorMode: mirrorMode,
+          return Stack(
+            children: [
+              ArcadeBackground(mirrorMode: mirrorMode),
+              SafeArea(
+                child: Stack(
+                  children: [
+                    if (turn != null)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          CenterHaloHud(
+                            timeBankListenable: _engine.timeBank,
+                            score: _engine.score,
+                            blitzStreak: _engine.blitzStreak,
+                            mirrorMode: mirrorMode,
+                          ),
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12.0),
+                              child: ArenaGrid(
+                                turn: turn,
+                                onZoneTouched: _engine.handleZoneTouch,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      Expanded(
-                        child: MirrorBezelWrapper(
-                          mirrorMode: mirrorMode,
-                          child: ArenaGrid(
-                            turn: turn,
-                            onZoneTouched: _engine.handleZoneTouch,
+
+                    if (_engine.isTransitioning)
+                      _WaveTransitionBanner(message: _engine.transitionMessage),
+
+                    if (_engine.status == GameStatus.playing && _engine.isWaitingForFirstTouch && !_engine.isTransitioning)
+                      const Positioned(
+                        bottom: 40,
+                        left: 0,
+                        right: 0,
+                        child: IgnorePointer(
+                          child: Center(
+                            child: Text(
+                              'TAP TO BEGIN WAVE',
+                              style: TextStyle(
+                                color: Colors.white54,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 2.0,
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
 
-                // 2. Start / Game Over Overlay with Wave Jump Selector
-                if (_engine.status != GameStatus.playing)
-                  _MenuOverlay(
-                    status: _engine.status,
-                    reason: _engine.gameOverReason,
-                    score: _engine.score,
-                    highScore: _engine.highScore,
-                    selectedStartTurn: _selectedStartTurn,
-                    onSelectStartTurn: (turnNum) {
-                      setState(() => _selectedStartTurn = turnNum);
-                    },
-                    onPlayPressed: () => _startGame(),
-                  ),
-              ],
-            );
-          },
-        ),
+                    if (_engine.status != GameStatus.playing)
+                      _MenuOverlay(
+                        status: _engine.status,
+                        reason: _engine.gameOverReason,
+                        score: _engine.score,
+                        highScore: _engine.highScore,
+                        selectedStartTurn: _selectedStartTurn,
+                        maxUnlockedTurn: _engine.maxUnlockedTurn, // Added dynamic unlock variable!
+                        onSelectStartTurn: (turnNum) {
+                          setState(() => _selectedStartTurn = turnNum);
+                        },
+                        onPlayPressed: () => _startGame(),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _WaveTransitionBanner extends StatelessWidget {
+  final String message;
+
+  const _WaveTransitionBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.65),
+      alignment: Alignment.center,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0.8, end: 1.0),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+        builder: (context, scale, child) {
+          return Transform.scale(
+            scale: scale,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFF0055).withValues(alpha: 0.85),
+                border: const Border(
+                  top: BorderSide(color: Colors.white, width: 2),
+                  bottom: BorderSide(color: Colors.white, width: 2),
+                ),
+                boxShadow: const [
+                  BoxShadow(color: Color(0xFFFF0055), blurRadius: 20),
+                ],
+              ),
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 4.0,
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -129,17 +196,19 @@ class _MenuOverlay extends StatelessWidget {
   final int score;
   final int highScore;
   final int selectedStartTurn;
+  final int maxUnlockedTurn; // Now passed in directly from the Engine
   final ValueChanged<int> onSelectStartTurn;
   final VoidCallback onPlayPressed;
 
   static const List<_WavePreset> _presets = [
     _WavePreset('W1: 2-Way (T1)', 1),
     _WavePreset('W2: 3-Way (T11)', 11),
-    _WavePreset('W3: 5-Way + Color (T21)', 21),
-    _WavePreset('W4: 2-Way Vert Mirror (T33)', 33),
-    _WavePreset('W5A: 4-Way Vert Mirror (T46)', 46),
-    _WavePreset('W5B: 4-Way Horiz Mirror (T54)', 54),
-    _WavePreset('W6: Overdrive Chaos (T61)', 61),
+    _WavePreset('W3: 5-Way Dir (T21)', 21),
+    _WavePreset('W4: 5-Way+Col (T33)', 33),
+    _WavePreset('W5: Mirror Vert (T46)', 46),
+    _WavePreset('W6: 4-Way Mirr (T58)', 58),
+    _WavePreset('W7: Mirr Horiz (T68)', 68),
+    _WavePreset('W8: Mirr Full (T78)', 78),
   ];
 
   const _MenuOverlay({
@@ -148,6 +217,7 @@ class _MenuOverlay extends StatelessWidget {
     required this.score,
     required this.highScore,
     required this.selectedStartTurn,
+    required this.maxUnlockedTurn,
     required this.onSelectStartTurn,
     required this.onPlayPressed,
   });
@@ -155,14 +225,8 @@ class _MenuOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool isGameOver = status == GameStatus.gameOver;
-    final String subtitle = switch (reason) {
-      GameOverReason.wrongZone => 'WRONG ZONE TAPPED!',
-      GameOverReason.timeExpired => 'TIME BANK DEPLETED!',
-      GameOverReason.none => 'SPATIAL & COLOR STROOP OVERDRIVE',
-    };
-
     return Container(
-      color: const Color(0xFF0D0F14).withValues(alpha: 0.94),
+      color: const Color(0xFF0D0F14).withValues(alpha: 0.85),
       padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
       alignment: Alignment.center,
       child: SingleChildScrollView(
@@ -170,23 +234,12 @@ class _MenuOverlay extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              isGameOver ? 'BRAIN SHORT-CIRCUITED' : 'LEFT — RIGHT',
-              textAlign: TextAlign.center,
+              isGameOver ? 'GAME OVER' : 'LEFT — RIGHT',
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 30,
+                fontSize: 32,
                 fontWeight: FontWeight.w900,
                 letterSpacing: 2.0,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              style: TextStyle(
-                color: isGameOver ? const Color(0xFFFF3366) : Colors.cyanAccent,
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.5,
               ),
             ),
             const SizedBox(height: 24),
@@ -199,58 +252,43 @@ class _MenuOverlay extends StatelessWidget {
                   fontWeight: FontWeight.w900,
                 ),
               ),
-              Text(
-                'BEST: $highScore',
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
               const SizedBox(height: 24),
             ],
-
-            // Quick Wave Jump Selector for Testing
-            const Text(
-              'JUMP TO WAVE (DEBUG):',
-              style: TextStyle(
-                color: Colors.white54,
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 1.4,
-              ),
-            ),
-            const SizedBox(height: 10),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               alignment: WrapAlignment.center,
               children: _presets.map((preset) {
                 final bool isSelected = selectedStartTurn == preset.startTurn;
+                final bool isLocked = preset.startTurn > maxUnlockedTurn;
+
                 return GestureDetector(
-                  onTap: () => onSelectStartTurn(preset.startTurn),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? Colors.cyanAccent.withValues(alpha: 0.22)
-                          : Colors.white.withValues(alpha: 0.06),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: isSelected ? Colors.cyanAccent : Colors.white24,
-                        width: isSelected ? 1.8 : 1.0,
+                  onTap: isLocked ? null : () => onSelectStartTurn(preset.startTurn),
+                  child: Opacity(
+                    opacity: isLocked ? 0.4 : 1.0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: isSelected ? Colors.cyanAccent.withValues(alpha: 0.22) : Colors.white12,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isSelected ? Colors.cyanAccent : Colors.white24,
+                        ),
                       ),
-                    ),
-                    child: Text(
-                      preset.label,
-                      style: TextStyle(
-                        color: isSelected ? Colors.cyanAccent : Colors.white70,
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (isLocked) const Icon(Icons.lock, size: 12, color: Colors.white),
+                          if (isLocked) const SizedBox(width: 4),
+                          Text(
+                            preset.label,
+                            style: TextStyle(
+                              color: isSelected ? Colors.cyanAccent : Colors.white70,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -258,36 +296,15 @@ class _MenuOverlay extends StatelessWidget {
               }).toList(),
             ),
             const SizedBox(height: 28),
-
-            // Start / Retry Button
-            Listener(
-              behavior: HitTestBehavior.opaque,
-              onPointerDown: (_) => onPlayPressed(),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 40,
-                  vertical: 18,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF00E5FF),
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF00E5FF).withValues(alpha: 0.4),
-                      blurRadius: 20,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
-                ),
-                child: Text(
-                  isGameOver ? 'TAP TO RETRY' : 'START OVERDRIVE',
-                  style: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                  ),
-                ),
+            ElevatedButton(
+              onPressed: onPlayPressed,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF00E5FF),
+                padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 18),
+              ),
+              child: Text(
+                isGameOver ? 'RETRY' : 'START',
+                style: const TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.w900),
               ),
             ),
           ],

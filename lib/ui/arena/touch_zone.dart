@@ -5,7 +5,7 @@ import '../../core/models/prompt.dart';
 class TouchZone extends StatefulWidget {
   final ZoneId zoneId;
   final GameColor gameColor;
-  final Prompt? activePrompt; // Non-null only if the prompt is displayed inside THIS button
+  final Prompt? activePrompt;
   final MirrorMode mirrorMode;
   final VoidCallback onTouchDown;
 
@@ -27,7 +27,7 @@ class _TouchZoneState extends State<TouchZone> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isMirrored = widget.mirrorMode.isMirrored;
+    final Color baseColor = widget.gameColor.color;
 
     return Listener(
       behavior: HitTestBehavior.opaque,
@@ -42,49 +42,53 @@ class _TouchZoneState extends State<TouchZone> {
         if (mounted) setState(() => _isPressed = false);
       },
       child: AnimatedScale(
-        scale: _isPressed ? 0.96 : 1.0,
-        duration: const Duration(milliseconds: 50),
+        scale: _isPressed ? 0.94 : 1.0,
+        duration: const Duration(milliseconds: 45),
         child: Container(
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            color: widget.gameColor.color,
-            borderRadius: BorderRadius.circular(22),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color.lerp(baseColor, Colors.white, 0.15)!,
+                baseColor,
+                Color.lerp(baseColor, Colors.black, 0.25)!,
+              ],
+            ),
+            borderRadius: BorderRadius.circular(24),
             border: Border.all(
-              color: isMirrored
-                  ? Colors.white.withValues(alpha: 0.45)
-                  : Colors.white.withValues(alpha: 0.15),
-              width: isMirrored ? 2.5 : 1.5,
+              color: Colors.white.withValues(alpha: 0.15),
+              width: 1.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: widget.gameColor.color.withValues(alpha: 0.35),
+                color: baseColor.withValues(alpha: 0.35),
                 blurRadius: 16,
                 offset: const Offset(0, 4),
               ),
             ],
           ),
           child: Stack(
+            fit: StackFit.expand,
             children: [
-              // Subtle watermark label in corner so player knows zone geometry
-              Positioned(
-                top: 12,
-                left: 16,
-                child: Text(
-                  widget.zoneId.label,
-                  style: TextStyle(
-                    color: Colors.black.withValues(alpha: 0.22),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                  ),
-                ),
-              ),
-
-              // Active Stroop Prompt Pill (if spawned in this zone)
+              // The Transformed Prompt Badge (Watermarks removed!)
               if (widget.activePrompt != null)
-                Center(
-                  child: _PromptBadge(
-                    prompt: widget.activePrompt!,
-                    mirrorMode: widget.mirrorMode,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 12.0),
+                  child: Center(
+                    child: TweenAnimationBuilder<double>(
+                      tween: Tween<double>(begin: 0.75, end: 1.0),
+                      duration: const Duration(milliseconds: 120),
+                      curve: Curves.easeOutBack,
+                      builder: (context, scale, child) {
+                        return Transform.scale(scale: scale, child: child);
+                      },
+                      child: _PromptBadge(
+                        prompt: widget.activePrompt!,
+                        mirrorMode: widget.mirrorMode,
+                      ),
+                    ),
                   ),
                 ),
             ],
@@ -106,68 +110,47 @@ class _PromptBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bool isMirrored = mirrorMode.isMirrored;
-    final double dx = mirrorMode.mirrorLeftRight ? 3.5 : 0.0;
-    final double dy = mirrorMode.mirrorTopBottom ? 3.5 : 0.0;
+    final bool isColorPrompt = prompt.type == PromptType.color;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D0F14).withValues(alpha: 0.90),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isMirrored ? Colors.cyanAccent : Colors.white24,
-          width: isMirrored ? 2.0 : 1.0,
-        ),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black54,
-            blurRadius: 12,
-            offset: Offset(0, 4),
+    // The genius text-flipping logic
+    final double flipX = mirrorMode.mirrorLeftRight ? -1.0 : 1.0;
+    final double flipY = mirrorMode.mirrorTopBottom ? -1.0 : 1.0;
+
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0D0F14).withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isColorPrompt ? Colors.amberAccent : Colors.white30,
+            width: isColorPrompt ? 2.0 : 1.2,
           ),
-        ],
-      ),
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          // Chromatic Aberration (Red/Cyan Split) when Mirror Mode is active
-          if (isMirrored) ...[
-            Transform.translate(
-              offset: Offset(-dx, -dy),
-              child: Text(
-                prompt.text,
-                style: TextStyle(
-                  color: const Color(0xFFFF0055).withValues(alpha: 0.75),
-                  fontSize: 30,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2.0,
-                ),
-              ),
-            ),
-            Transform.translate(
-              offset: Offset(dx, dy),
-              child: Text(
-                prompt.text,
-                style: TextStyle(
-                  color: const Color(0xFF00FFFF).withValues(alpha: 0.75),
-                  fontSize: 30,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 2.0,
-                ),
-              ),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black54,
+              blurRadius: 12,
+              offset: Offset(0, 6),
             ),
           ],
-          // Core Crisp Prompt Text
-          Text(
+        ),
+        child: Transform.scale(
+          scaleX: flipX,
+          scaleY: flipY,
+          alignment: Alignment.center,
+          child: Text(
             prompt.text,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 30,
+            maxLines: 1,
+            softWrap: false,
+            style: TextStyle(
+              color: isColorPrompt ? Colors.amberAccent : Colors.white,
+              fontSize: 32,
               fontWeight: FontWeight.w900,
               letterSpacing: 2.0,
             ),
           ),
-        ],
+        ),
       ),
     );
   }

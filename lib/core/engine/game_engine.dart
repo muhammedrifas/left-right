@@ -1,8 +1,9 @@
 import 'dart:math';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import '../audio/sound_manager.dart';
 import '../models/game_enums.dart';
 import '../models/turn_snapshot.dart';
+import '../services/save_manager.dart';
 import 'overdrive_director.dart';
 import 'turn_generator.dart';
 
@@ -13,22 +14,23 @@ class GameEngine extends ChangeNotifier {
   final OverdriveDirector _director;
   final TurnGenerator _generator;
 
-  /// Dedicated notifier for the 60/120fps timer bar so only the HUD repaints every frame.
   final ValueNotifier<double> timeBank =
       ValueNotifier<double>(OverdriveDirector.initialTimeBank);
-
   final Stopwatch _turnStopwatch = Stopwatch();
 
   GameStatus _status = GameStatus.idle;
   GameOverReason _gameOverReason = GameOverReason.none;
   int _score = 0;
-  int _highScore = 0;
   int _turnCount = 0;
   int _blitzStreak = 0;
-  bool _didJustSwitchMirrorMode = false;
 
   TurnSnapshot? _currentTurn;
   WaveConfig? _currentWaveConfig;
+
+  // Transition & Pacing State
+  double _transitionTimer = 0.0;
+  String _transitionMessage = '';
+  bool _isWaitingForFirstTouch = true;
 
   GameEngine({
     OverdriveDirector? director,
@@ -36,17 +38,21 @@ class GameEngine extends ChangeNotifier {
   })  : _director = director ?? OverdriveDirector(),
         _generator = generator ?? TurnGenerator();
 
-  // Public Getters
   GameStatus get status => _status;
   GameOverReason get gameOverReason => _gameOverReason;
   int get score => _score;
-  int get highScore => _highScore;
   int get turnCount => _turnCount;
   int get blitzStreak => _blitzStreak;
-  bool get didJustSwitchMirrorMode => _didJustSwitchMirrorMode;
   TurnSnapshot? get currentTurn => _currentTurn;
 
-  /// Starts or restarts Endless Overdrive at [startTurn] (defaults to Turn 1).
+  bool get isTransitioning => _transitionTimer > 0.0;
+  String get transitionMessage => _transitionMessage;
+  bool get isWaitingForFirstTouch => _isWaitingForFirstTouch;
+
+  // Expose permanent saves directly to the UI
+  int get highScore => SaveManager.instance.highScore;
+  int get maxUnlockedTurn => SaveManager.instance.maxUnlockedTurn;
+
   void startGame({int startTurn = 1}) {
     _director.reset();
     _score = 0;
@@ -54,16 +60,31 @@ class GameEngine extends ChangeNotifier {
     _blitzStreak = 0;
     _gameOverReason = GameOverReason.none;
     _status = GameStatus.playing;
+    _transitionTimer = 0.0;
+    _isWaitingForFirstTouch = true;
     timeBank.value = OverdriveDirector.initialTimeBank;
 
     _advanceToNextTurn(isFirstTurn: true);
-    HapticFeedback.mediumImpact();
+    SoundManager.instance.playMirrorSwitch();
   }
 
-  /// Called on every hardware VSync frame by the UI's Ticker (passes delta seconds).
   void onTick(double dtSeconds) {
     if (_status != GameStatus.playing) return;
 
+    // 1. Handle Freeze-Frame Transition
+    if (_transitionTimer > 0.0) {
+      _transitionTimer -= dtSeconds;
+      if (_transitionTimer <= 0.0) {
+        _transitionTimer = 0.0;
+        notifyListeners(); // Clears the banner
+      }
+      return; // Do not drain the Time Bank while the banner is on screen!
+    }
+
+    // 2. Pause timer drain if we are waiting for the player's first strategic touch
+    if (_isWaitingForFirstTouch) return;
+
+    // 3. Normal Time Bank drain
     final nextTime = timeBank.value - dtSeconds;
     if (nextTime <= 0.0) {
       timeBank.value = 0.0;
@@ -73,72 +94,75 @@ class GameEngine extends ChangeNotifier {
     }
   }
 
-  /// Triggered immediately on `Listener.onPointerDown` for zero-latency touch response.
   void handleZoneTouch(ZoneId touchedZone) {
-    if (_status != GameStatus.playing || _currentTurn == null) return;
+    if (_status != GameStatus.playing || _currentTurn == null || isTransitioning) return;
 
-    final isCorrect = _currentTurn!.validTargetZones.contains(touchedZone);
+    // Clear the wait flag and start the reaction stopwatch the moment they touch
+    if (_isWaitingForFirstTouch) {
+      _isWaitingForFirstTouch = false;
+      _turnStopwatch..reset()..start();
+    }
 
-    if (!isCorrect) {
+    if (!_currentTurn!.validTargetZones.contains(touchedZone)) {
       _triggerGameOver(GameOverReason.wrongZone);
       return;
     }
 
-    // 1. Measure exact reaction time in seconds
-    final double reactionSeconds =
-        _turnStopwatch.elapsedMicroseconds / 1000000.0;
-
-    // 2. Calculate Time Bank reward and cap at maxTimeBankCap
-    final double timeAdded = _director.calculateTimeReward(
-      config: _currentWaveConfig!,
-      reactionTimeSeconds: reactionSeconds,
-    );
+    final double reactionSeconds = _turnStopwatch.elapsedMicroseconds / 1000000.0;
+    
     timeBank.value = min(
       OverdriveDirector.maxTimeBankCap,
-      timeBank.value + timeAdded,
+      timeBank.value + _director.calculateTimeReward(
+        config: _currentWaveConfig!,
+        reactionTimeSeconds: reactionSeconds,
+      ),
     );
 
-    // 3. Calculate Score & Blitz streak
-    if (reactionSeconds <= OverdriveDirector.blitzThresholdSeconds) {
+    final bool isBlitz = reactionSeconds <= OverdriveDirector.blitzThresholdSeconds;
+    if (isBlitz) {
       _blitzStreak++;
-      HapticFeedback.lightImpact();
     } else {
       _blitzStreak = 0;
-      HapticFeedback.selectionClick();
     }
+    SoundManager.instance.playTap(isBlitz: isBlitz);
 
     _score += _director.calculatePoints(
       config: _currentWaveConfig!,
       reactionTimeSeconds: reactionSeconds,
     );
-    if (_score > _highScore) {
-      _highScore = _score;
-    }
+    
+    // Check and save High Score natively
+    SaveManager.instance.saveHighScore(_score);
 
-    // 4. Spawn next turn immediately
     _advanceToNextTurn();
   }
 
   void _advanceToNextTurn({bool isFirstTurn = false}) {
-    final previousMirror = _currentTurn?.mirrorMode ?? MirrorMode.none;
+    final WaveConfig nextConfig = _director.getConfigForTurn(_turnCount + 1);
+    final bool isWaveChange = _currentWaveConfig == null || nextConfig.waveName != _currentWaveConfig!.waveName;
 
     _turnCount++;
-    _currentWaveConfig = _director.getConfigForTurn(_turnCount);
+    
+    // Unlock new levels in permanent storage immediately when a new turn is reached!
+    SaveManager.instance.saveMaxUnlockedTurn(_turnCount);
+
+    _currentWaveConfig = nextConfig;
     _currentTurn = _generator.generateTurn(
       turnNumber: _turnCount,
       config: _currentWaveConfig!,
     );
 
-    _didJustSwitchMirrorMode =
-        !isFirstTurn && (previousMirror != _currentTurn!.mirrorMode);
-
-    if (_didJustSwitchMirrorMode) {
-      HapticFeedback.heavyImpact();
+    if (isWaveChange) {
+      // Pause game for 850ms to show the banner (skip delay on absolute first turn)
+      _transitionTimer = isFirstTurn ? 0.0 : 0.85; 
+      _transitionMessage = _currentWaveConfig!.waveName;
+      _isWaitingForFirstTouch = true; // Wait for player to process new rules
+      _turnStopwatch..reset()..stop();
+      if (!isFirstTurn) SoundManager.instance.playMirrorSwitch();
+    } else {
+      _isWaitingForFirstTouch = false;
+      _turnStopwatch..reset()..start();
     }
-
-    _turnStopwatch
-      ..reset()
-      ..start();
 
     notifyListeners();
   }
@@ -147,7 +171,7 @@ class GameEngine extends ChangeNotifier {
     _turnStopwatch.stop();
     _status = GameStatus.gameOver;
     _gameOverReason = reason;
-    HapticFeedback.vibrate();
+    SoundManager.instance.playGameOver();
     notifyListeners();
   }
 

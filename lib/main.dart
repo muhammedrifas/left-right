@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'core/services/save_manager.dart';
 import 'ui/screens/game_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load saved high scores and unlocked levels from device storage
+  await SaveManager.instance.init();
 
   // Lock to Portrait mode for consistent thumb ergonomics
   await SystemChrome.setPreferredOrientations([
