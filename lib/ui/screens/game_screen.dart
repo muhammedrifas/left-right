@@ -160,6 +160,7 @@ class _GameScreenState extends State<GameScreen>
                           highScore: _engine.highScore,
                           lastTurnCount: _engine.turnCount, // <--- We now pass the exact turn the player died on
                           maxUnlockedTurn: _engine.maxUnlockedTurn,
+                          selectedStartTurn: _selectedStartTurn,
                           onMenuStateChanged: _changeMenuState,
                           onReturnToMain: _returnToMain,
                           onPlayRequested: _startGame,
@@ -242,6 +243,7 @@ class _MenuOverlay extends StatelessWidget {
   final int highScore;
   final int lastTurnCount;
   final int maxUnlockedTurn;
+  final int selectedStartTurn;
   final ValueChanged<MenuState> onMenuStateChanged;
   final VoidCallback onReturnToMain;
   final void Function(int startTurn, GameMode mode) onPlayRequested;
@@ -266,13 +268,14 @@ class _MenuOverlay extends StatelessWidget {
     required this.highScore,
     required this.lastTurnCount,
     required this.maxUnlockedTurn,
+    required this.selectedStartTurn,
     required this.onMenuStateChanged,
     required this.onReturnToMain,
     required this.onPlayRequested,
   });
 
   Future<void> _launchPrivacyPolicy() async {
-    final Uri url = Uri.parse('https://example.com/privacy-policy');
+    final Uri url = Uri.parse('https://muhammedrifas.github.io/left-right-privacy-policy/');
     if (!await launchUrl(url)) {
       debugPrint('Could not launch $url');
     }
@@ -419,11 +422,17 @@ class _MenuOverlay extends StatelessWidget {
           color: const Color(0xFF00E5FF),
           onTap: () {
             if (status == GameStatus.gameOver) {
-              // Calculate the highest valid level/wave the player reached before dying
               int retryLevel = 1;
-              for (var preset in presets) {
-                if (preset.startTurn <= lastTurnCount) {
-                  retryLevel = preset.startTurn;
+              
+              // NEW LOGIC: Check if it's a fixed mode and just restart the current level
+              if (currentMode == GameMode.zen) { 
+                retryLevel = selectedStartTurn; 
+              } else {
+                // ORIGINAL LOGIC: For dynamic modes based on lastTurnCount
+                for (var preset in presets) {
+                  if (preset.startTurn <= lastTurnCount) {
+                    retryLevel = preset.startTurn;
+                  }
                 }
               }
               onPlayRequested(retryLevel, currentMode); 
@@ -549,15 +558,17 @@ class _MenuOverlay extends StatelessWidget {
   }
 
   Widget _buildSettings() {
-    final bool isSoundOn = SaveManager.instance.soundEnabled;
     return StatefulBuilder(
       builder: (context, setStateLocal) {
+        // MOVED HERE: Fetches the fresh state every time the button is tapped
+        final bool isSoundOn = SaveManager.instance.soundEnabled; 
+        
         return Column(
           children: [
             GestureDetector(
               onTap: () async {
                 await SaveManager.instance.toggleSound();
-                setStateLocal(() {});
+                setStateLocal(() {}); // Forces the UI to redraw instantly
               },
               child: Container(
                 width: 240,
