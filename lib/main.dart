@@ -1,15 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'core/audio/sound_manager.dart';
 import 'core/services/save_manager.dart';
 import 'ui/screens/game_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load saved high scores and unlocked levels from device storage
+  // Load saved data and preload audio assets into RAM
   await SaveManager.instance.init();
+  await SoundManager.instance.init();
 
-  // Lock to Portrait mode for consistent thumb ergonomics
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
